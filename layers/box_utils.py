@@ -86,22 +86,50 @@ def match(threshold, truths, priors, variances, labels, loc_t, conf_t, idx):
         The matched indices corresponding to 1)location and 2)confidence preds.
     """
     # jaccard index
+    """
+    overlaps Shape为[truths.shape[0],priors.shape[0]],每一行对应truths中的一个框和priors中所有框的iou
+    """
     overlaps = jaccard(
         truths,
         point_form(priors)
     )
     # (Bipartite Matching)
     # [1,num_objects] best prior for each ground truth
-    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
+    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)   #每行的最大值
     # [1,num_priors] best ground truth for each prior
-    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
-    best_truth_idx.squeeze_(0)
+    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)   #每列的最大值
+    best_truth_idx.squeeze_(0)  #Tesnor.squeeze不真的改变自身的维度，该局结果上等价于best_truth_idx=best_truth_idx.squeeze(0) 
     best_truth_overlap.squeeze_(0)
     best_prior_idx.squeeze_(1)
     best_prior_overlap.squeeze_(1)
+    """
+    index_fill_(dim, index, val) → Tensor
+    按参数index中的索引数确定的顺序，将原tensor用参数 val值填充。
+    确保匹配的框不会因为阈值太低被过滤掉
+    best_truth是每一个priors box匹配一个最好的ground truth ，形状为4096
+    """
+    
     best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
     # TODO refactor: index  best_prior_idx with long tensor
     # ensure every gt matches with its prior of max overlap
+
+    """
+    本步骤确保每一个ground truth都能匹配到一个priors box
+    举个例子有gt : A1,A2
+             pb:  B1,B2,B3
+            然后iou为[[0.5,0.5,0.4]
+                      [0.6,0.8,0.6]]
+        按照best_truth_overlap的匹配规则，则B1,B2,B3都匹配到A2，此时A1就没了匹配对象
+        因此，下面的操作就是为了确保每一个gt都能匹配到pb.经过下面的操作,则B1,B3匹配A2,B2匹配A1
+        TIPS:貌似有点问题...
+        iou为[[0.5,0.7,0.4]
+             [0.6,0.8,0.6]]时无法匹配
+
+    """
+    """
+    下面的代码逻辑上可能有问题,因为best_prior_idx内部可能有重复的数字,这样修改会被后面的数覆盖前面的
+    无法解决两个物体匹配到同一个default box的问题
+    """
     for j in range(best_prior_idx.size(0)):
         best_truth_idx[best_prior_idx[j]] = j
     matches = truths[best_truth_idx]          # Shape: [num_priors,4]
@@ -153,6 +181,9 @@ def decode(loc, priors, variances):
     boxes = torch.cat((
         priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:],
         priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])), 1)
+    #上面的boxes为[x,y,w,h]形式
+
+    #转化为[xmin,ymin,xmax.ymax]形式
     boxes[:, :2] -= boxes[:, 2:] / 2
     boxes[:, 2:] += boxes[:, :2]
     return boxes
